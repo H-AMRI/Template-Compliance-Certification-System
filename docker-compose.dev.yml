@@ -1,0 +1,49 @@
+version: '3.3'
+
+services:
+  # Database
+  postgres:
+    image: postgres:13-alpine
+    container_name: compliance-postgres
+    environment:
+      POSTGRES_USER: compliance_user
+      POSTGRES_PASSWORD: compliance_pass
+      POSTGRES_DB: compliance_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - compliance-network
+
+  # Cache
+  redis:
+    image: redis:7-alpine
+    container_name: compliance-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - compliance-network
+
+  # Template Manager Service (simplified for testing)
+  template-manager:
+    build:
+      context: ./services/template-manager
+      dockerfile: Dockerfile
+    container_name: compliance-template-manager
+    environment:
+      DATABASE_URL: postgresql://compliance_user:compliance_pass@postgres:5432/compliance_db
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "8001:80"
+    depends_on:
+      - postgres
+    networks:
+      - compliance-network
+
+networks:
+  compliance-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
