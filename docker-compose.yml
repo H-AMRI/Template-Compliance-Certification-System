@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.3'
 
 services:
   # Database
@@ -13,7 +13,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - compliance-network
     healthcheck:
@@ -56,10 +55,8 @@ services:
       - template_uploads:/app/uploads
       - model_cache:/root/.paddleocr
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
     networks:
       - compliance-network
     restart: unless-stopped
@@ -77,7 +74,6 @@ services:
       DONUT_SERVICE_URL: http://donut-processor:80
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
-      CUDA_VISIBLE_DEVICES: 0
     ports:
       - "8002:80"
     volumes:
@@ -90,13 +86,6 @@ services:
     networks:
       - compliance-network
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
   # Donut Processor Service
   donut-processor:
@@ -109,7 +98,6 @@ services:
       TRANSFORMERS_CACHE: /app/cache
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
-      CUDA_VISIBLE_DEVICES: 0
     ports:
       - "8003:80"
     volumes:
@@ -120,13 +108,6 @@ services:
     networks:
       - compliance-network
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
   # PDF Generator Service
   pdf-generator:
@@ -151,21 +132,23 @@ services:
       - compliance-network
     restart: unless-stopped
 
-  # Frontend
-  frontend:
+  # Frontend - Build stage
+  frontend-builder:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        VITE_API_BASE_URL: http://localhost/api
-    container_name: compliance-frontend
+      dockerfile: Dockerfile.dev
+    container_name: compliance-frontend-builder
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
+      VITE_API_BASE_URL: http://localhost/api
+    ports:
+      - "3000:3000"
     volumes:
-      - frontend_build:/app/dist
+      - ./frontend:/app
+      - /app/node_modules
     networks:
       - compliance-network
-    command: npm run build
+    command: npm run start
 
   # Nginx Reverse Proxy
   nginx:
@@ -173,25 +156,18 @@ services:
     container_name: compliance-nginx
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - frontend_build:/usr/share/nginx/html:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
       - ./certs:/etc/nginx/certs:ro
     depends_on:
       - template-manager
       - validation-engine
       - donut-processor
       - pdf-generator
-      - frontend
     networks:
       - compliance-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
 networks:
   compliance-network:
@@ -205,4 +181,3 @@ volumes:
   detectron_cache:
   donut_cache:
   pdf_output:
-  frontend_build:
