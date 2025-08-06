@@ -57,5 +57,15 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+    {
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^6.24.0",
+    "axios": "^1.7.2",
+    "@mui/material": "^5.16.0",
+    "typescript": "^5.5.3"
+  }
+}
   }
 }
