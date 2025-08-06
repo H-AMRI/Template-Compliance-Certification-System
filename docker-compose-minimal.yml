@@ -1,0 +1,48 @@
+version: '3.3'
+
+services:
+  postgres:
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_USER: compliance_user
+      POSTGRES_PASSWORD: compliance_pass
+      POSTGRES_DB: compliance_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U compliance_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  template-manager:
+    build:
+      context: ./services/template-manager
+      dockerfile: Dockerfile-minimal
+    environment:
+      DATABASE_URL: postgresql://compliance_user:compliance_pass@postgres:5432/compliance_db
+      PYTHONUNBUFFERED: 1
+      UPLOAD_DIR: /app/uploads
+    ports:
+      - "8001:80"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      - postgres
+
+  frontend-dev:
+    image: node:18-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8001
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
