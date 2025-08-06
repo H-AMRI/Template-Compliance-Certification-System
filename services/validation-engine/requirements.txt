@@ -3,7 +3,8 @@ uvicorn==0.24.0
 paddlepaddle==2.5.2
 paddleocr==2.7.0.3
 layoutparser==0.3.4
-opencv-python==4.8.1.78
+opencv-python<=4.6.0.66
+opencv-contrib-python<=4.6.0.66
 numpy==1.24.3
 pillow==10.1.0
 transformers==4.35.2
