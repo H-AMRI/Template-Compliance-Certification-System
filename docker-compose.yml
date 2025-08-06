@@ -1,0 +1,208 @@
+version: '3.8'
+
+services:
+  # Database
+  postgres:
+    image: postgres:13-alpine
+    container_name: compliance-postgres
+    environment:
+      POSTGRES_USER: compliance_user
+      POSTGRES_PASSWORD: compliance_pass
+      POSTGRES_DB: compliance_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - compliance-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U compliance_user -d compliance_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Cache
+  redis:
+    image: redis:7-alpine
+    container_name: compliance-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - compliance-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Template Manager Service
+  template-manager:
+    build:
+      context: ./services/template-manager
+      dockerfile: Dockerfile
+    container_name: compliance-template-manager
+    environment:
+      DATABASE_URL: postgresql://compliance_user:compliance_pass@postgres:5432/compliance_db
+      REDIS_URL: redis://redis:6379
+      UPLOAD_DIR: /app/uploads
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "8001:80"
+    volumes:
+      - template_uploads:/app/uploads
+      - model_cache:/root/.paddleocr
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - compliance-network
+    restart: unless-stopped
+
+  # Validation Engine Service
+  validation-engine:
+    build:
+      context: ./services/validation-engine
+      dockerfile: Dockerfile
+    container_name: compliance-validation-engine
+    environment:
+      DATABASE_URL: postgresql://compliance_user:compliance_pass@postgres:5432/compliance_db
+      TEMPLATE_SERVICE_URL: http://template-manager:80
+      PDF_SERVICE_URL: http://pdf-generator:80
+      DONUT_SERVICE_URL: http://donut-processor:80
+      REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: 1
+      CUDA_VISIBLE_DEVICES: 0
+    ports:
+      - "8002:80"
+    volumes:
+      - model_cache:/root/.paddleocr
+      - detectron_cache:/root/.torch
+    depends_on:
+      - postgres
+      - redis
+      - template-manager
+    networks:
+      - compliance-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Donut Processor Service
+  donut-processor:
+    build:
+      context: ./services/donut-processor
+      dockerfile: Dockerfile
+    container_name: compliance-donut-processor
+    environment:
+      DONUT_MODEL: naver-clova-ix/donut-base
+      TRANSFORMERS_CACHE: /app/cache
+      REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: 1
+      CUDA_VISIBLE_DEVICES: 0
+    ports:
+      - "8003:80"
+    volumes:
+      - donut_cache:/app/cache
+      - model_cache:/root/.cache
+    depends_on:
+      - redis
+    networks:
+      - compliance-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # PDF Generator Service
+  pdf-generator:
+    build:
+      context: ./services/pdf-generator
+      dockerfile: Dockerfile
+    container_name: compliance-pdf-generator
+    environment:
+      CERT_PATH: /certs/cert.pem
+      KEY_PATH: /certs/key.pem
+      CERT_PASSWORD: ""
+      REDIS_URL: redis://redis:6379
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "8004:80"
+    volumes:
+      - ./certs:/certs:ro
+      - pdf_output:/app/output
+    depends_on:
+      - redis
+    networks:
+      - compliance-network
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost/api
+    container_name: compliance-frontend
+    environment:
+      NODE_ENV: production
+    volumes:
+      - frontend_build:/app/dist
+    networks:
+      - compliance-network
+    command: npm run build
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: compliance-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - frontend_build:/usr/share/nginx/html:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - template-manager
+      - validation-engine
+      - donut-processor
+      - pdf-generator
+      - frontend
+    networks:
+      - compliance-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  compliance-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  template_uploads:
+  model_cache:
+  detectron_cache:
+  donut_cache:
+  pdf_output:
+  frontend_build:
